@@ -28,9 +28,16 @@ mongoose
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 // Middlewares
+const allowedOrigins = [
+  "https://colo71-server.vercel.app",
+  "https://colo71-admin.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
+
 app.use(
   cors({
-    origin: "http://localhost:5173",
+    origin: allowedOrigins,
     credentials: true,
   }),
 );
