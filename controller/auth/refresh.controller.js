@@ -5,7 +5,14 @@ const UserModel = require("../../model/userModel.js");
 const refreshAccessToken = async (req, res) => {
   try {
     const refreshToken = req.cookies?.refreshToken;
+    const isProduction = process.env.NODE_ENV === "production";
 
+    const authCookieOptions = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+      path: "/",
+    };
     if (!refreshToken) {
       return res.status(401).json({
         success: false,
@@ -72,12 +79,9 @@ const refreshAccessToken = async (req, res) => {
     );
 
     res.cookie("accessToken", newAccessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      ...authCookieOptions,
       maxAge: 15 * 60 * 1000,
     });
-
     return res.status(200).json({
       success: true,
       code: "TOKEN_REFRESHED",

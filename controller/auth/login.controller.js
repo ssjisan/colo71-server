@@ -277,12 +277,14 @@ const loginUser = async (req, res) => {
     // 11. NORMAL LOGIN
     // ==================================================
 
-    // At this point:
-    //
-    // - User exists
-    // - Account is active
-    // - Password is correct
-    // - Password does not require changing
+    const isProduction = process.env.NODE_ENV === "production";
+
+    const authCookieOptions = {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+      path: "/",
+    };
 
     // --------------------------------------------------
     // Create access token
@@ -319,9 +321,7 @@ const loginUser = async (req, res) => {
     // --------------------------------------------------
 
     res.cookie("accessToken", accessToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      ...authCookieOptions,
       maxAge: 15 * 60 * 1000,
     });
 
@@ -330,9 +330,7 @@ const loginUser = async (req, res) => {
     // --------------------------------------------------
 
     res.cookie("refreshToken", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      ...authCookieOptions,
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
 
@@ -340,11 +338,7 @@ const loginUser = async (req, res) => {
     // Clear any old password-change cookie
     // --------------------------------------------------
 
-    res.clearCookie("passwordChangeToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-    });
+    res.clearCookie("passwordChangeToken", authCookieOptions);
 
     // ==================================================
     // 12. Update successful login information
