@@ -21,11 +21,16 @@ const storagePath = process.env.STORAGE_PATH || path.join(__dirname, "uploads");
 const app = express();
 const port = process.env.PORT || 8001;
 
+console.log("Environment:", process.env.NODE_ENV);
+console.log("MONGO_URI exists:", Boolean(process.env.MONGO_URI));
+
 // Connect to MongoDB
 mongoose
   .connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+  .then(() => console.log("MongoDB connected successfully"))
+  .catch((err) => {
+    console.error("MongoDB connection failed:", err.name, err.message);
+  });
 
 // Middlewares
 const allowedOrigins = [
