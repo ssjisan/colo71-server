@@ -1,38 +1,44 @@
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 
 const UserModel = require("../../model/userModel.js");
+const AuthSessionModel = require("../../model/authSessionModel.js");
 const { comparePassword } = require("../../helper/passwordHash.js");
-
-const DEFAULT_PASSWORD = "12345678";
+const { getCookieOptions } = require("../../helper/getCookieOptions.js");
 
 const ACCESS_TOKEN_EXPIRES = "15m";
-const REFRESH_TOKEN_EXPIRES = "30d";
+const REFRESH_TOKEN_EXPIRES = "15d";
 const PASSWORD_CHANGE_TOKEN_EXPIRES = "10m";
+
+const ACCESS_TOKEN_MAX_AGE = 15 * 60 * 1000;
+const REFRESH_TOKEN_MAX_AGE = 15 * 24 * 60 * 60 * 1000;
+const PASSWORD_CHANGE_TOKEN_MAX_AGE = 10 * 60 * 1000;
+
+const MAX_FAILED_ATTEMPTS = 3;
+const LOCK_DURATION = 5 * 60 * 1000;
 
 const loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password } = req.body || {};
 
-    // ==================================================
-    // 1. Validate request
-    // ==================================================
-
-    if (!email || !password) {
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return res.status(400).json({
         success: false,
+        code: "INVALID_REQUEST",
         message: "Email and password are required",
       });
     }
 
-    // ==================================================
-    // 2. Normalize email
-    // ==================================================
+    if (!process.env.JWT_SECURE) {
+      throw new Error("JWT_SECURE is not configured");
+    }
 
     const normalizedEmail = email.trim().toLowerCase();
-
-    // ==================================================
-    // 3. Find user
-    // ==================================================
 
     const user = await UserModel.findOne({
       email: normalizedEmail,
@@ -44,16 +50,12 @@ const loginUser = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(404).json({
+      return res.status(401).json({
         success: false,
-        code: "USER_NOT_FOUND",
-        message: "No user found with this email",
+        code: "INVALID_CREDENTIALS",
+        message: "Invalid email or password",
       });
     }
-
-    // ==================================================
-    // 4. Check account status
-    // ==================================================
 
     if (!user.isActive) {
       return res.status(403).json({
@@ -64,64 +66,33 @@ const loginUser = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 5. Check temporary lock
-    // ==================================================
+    if (user.lockUntil && user.lockUntil > new Date()) {
+      const remainingSeconds = Math.ceil(
+        (user.lockUntil.getTime() - Date.now()) / 1000,
+      );
 
-    if (user.lockUntil) {
-      const now = new Date();
-
-      // Account is still locked
-      if (user.lockUntil > now) {
-        const remainingMilliseconds = user.lockUntil.getTime() - now.getTime();
-
-        const remainingSeconds = Math.ceil(remainingMilliseconds / 1000);
-
-        const remainingMinutes = Math.ceil(remainingSeconds / 60);
-
-        return res.status(423).json({
-          success: false,
-          code: "ACCOUNT_TEMPORARILY_LOCKED",
-          message: "Too many failed login attempts. Please try again later.",
-          lockUntil: user.lockUntil,
-          remainingSeconds,
-          remainingMinutes,
-        });
-      }
-
-      // Temporary lock expired.
-      // We intentionally DO NOT reset loginAttempts.
-      //
-      // Example:
-      // 3 wrong → 5 minute lock
-      // lock expires → attempt 4
-      // attempt 5 → account disabled
-
-      user.lockUntil = null;
-
-      await user.save();
+      return res.status(423).json({
+        success: false,
+        code: "ACCOUNT_TEMPORARILY_LOCKED",
+        message: "Too many failed login attempts. Please try again later.",
+        lockUntil: user.lockUntil,
+        remainingSeconds,
+        remainingMinutes: Math.ceil(remainingSeconds / 60),
+      });
     }
 
-    // ==================================================
-    // 6. Compare password
-    // ==================================================
+    if (user.lockUntil && user.lockUntil <= new Date()) {
+      user.lockUntil = null;
+      user.loginAttempts = 0;
+    }
 
     const passwordMatched = await comparePassword(password, user.password);
 
-    // ==================================================
-    // 7. Wrong password
-    // ==================================================
-
     if (!passwordMatched) {
-      user.loginAttempts += 1;
+      user.loginAttempts = (user.loginAttempts || 0) + 1;
 
-      // --------------------------------------------------
-      // 3rd wrong attempt → lock for 5 minutes
-      // --------------------------------------------------
-
-      if (user.loginAttempts === 3) {
-        user.lockUntil = new Date(Date.now() + 5 * 60 * 1000);
-
+      if (user.loginAttempts >= MAX_FAILED_ATTEMPTS) {
+        user.lockUntil = new Date(Date.now() + LOCK_DURATION);
         await user.save();
 
         return res.status(423).json({
@@ -135,28 +106,6 @@ const loginUser = async (req, res) => {
         });
       }
 
-      // --------------------------------------------------
-      // 5th wrong attempt → disable account
-      // --------------------------------------------------
-
-      if (user.loginAttempts >= 5) {
-        user.isActive = false;
-        user.lockUntil = null;
-
-        await user.save();
-
-        return res.status(403).json({
-          success: false,
-          code: "ACCOUNT_DISABLED",
-          message:
-            "Your account has been disabled due to multiple failed login attempts. Please contact an administrator.",
-        });
-      }
-
-      // --------------------------------------------------
-      // Normal wrong-password response
-      // --------------------------------------------------
-
       await user.save();
 
       return res.status(401).json({
@@ -164,102 +113,35 @@ const loginUser = async (req, res) => {
         code: "INVALID_CREDENTIALS",
         message: "Invalid email or password",
         loginAttempts: user.loginAttempts,
-        attemptsRemaining: Math.max(0, 3 - user.loginAttempts),
+        attemptsRemaining: Math.max(
+          0,
+          MAX_FAILED_ATTEMPTS - user.loginAttempts,
+        ),
       });
     }
-
-    // ==================================================
-    // 8. PASSWORD IS CORRECT
-    // ==================================================
-
-    // Successful password verification resets
-    // failed login tracking.
 
     user.loginAttempts = 0;
     user.lockUntil = null;
 
-    // ==================================================
-    // 9. FIRST-TIME / DEFAULT PASSWORD LOGIN
-    // ==================================================
+    const cookieOptions = getCookieOptions(req);
 
-    const isFirstLogin =
-      user.mustChangePassword === true && user.passwordChangedAt === null;
-
-    if (isFirstLogin) {
-      // --------------------------------------------------
-      // First login must use the default password
-      // --------------------------------------------------
-
-      if (password !== DEFAULT_PASSWORD) {
-        return res.status(401).json({
-          success: false,
-          code: "INVALID_CREDENTIALS",
-          message: "Invalid email or password",
-        });
-      }
-
-      // --------------------------------------------------
-      // Create password-change token
-      // --------------------------------------------------
-
+    // Forced password change: do not create a normal login session.
+    if (user.mustChangePassword) {
       const passwordChangeToken = jwt.sign(
         {
           _id: user._id.toString(),
           purpose: "PASSWORD_CHANGE",
         },
         process.env.JWT_SECURE,
-        {
-          expiresIn: PASSWORD_CHANGE_TOKEN_EXPIRES,
-        },
+        { expiresIn: PASSWORD_CHANGE_TOKEN_EXPIRES },
       );
 
-      // --------------------------------------------------
-      // Store password-change token in HttpOnly cookie
-      // --------------------------------------------------
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
 
       res.cookie("passwordChangeToken", passwordChangeToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 10 * 60 * 1000,
-      });
-
-      await user.save();
-
-      return res.status(200).json({
-        success: true,
-        code: "PASSWORD_CHANGE_REQUIRED",
-        message:
-          "This is your first login. You must change your default password before continuing.",
-        firstLogin: true,
-        mustChangePassword: true,
-      });
-    }
-
-    // ==================================================
-    // 10. PASSWORD CHANGE REQUIRED
-    // ==================================================
-
-    // Handles cases such as an administrator
-    // resetting a user's password.
-
-    if (user.mustChangePassword === true) {
-      const passwordChangeToken = jwt.sign(
-        {
-          _id: user._id.toString(),
-          purpose: "PASSWORD_CHANGE",
-        },
-        process.env.JWT_SECURE,
-        {
-          expiresIn: PASSWORD_CHANGE_TOKEN_EXPIRES,
-        },
-      );
-
-      res.cookie("passwordChangeToken", passwordChangeToken, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-        maxAge: 10 * 60 * 1000,
+        ...cookieOptions,
+        maxAge: PASSWORD_CHANGE_TOKEN_MAX_AGE,
       });
 
       await user.save();
@@ -268,97 +150,68 @@ const loginUser = async (req, res) => {
         success: true,
         code: "PASSWORD_CHANGE_REQUIRED",
         message: "You must change your password before continuing.",
-        firstLogin: false,
         mustChangePassword: true,
       });
     }
 
-    // ==================================================
-    // 11. NORMAL LOGIN
-    // ==================================================
+    const roleId = user.role?._id || user.role;
 
-    const isProduction = process.env.NODE_ENV === "production";
+    if (!roleId) {
+      return res.status(403).json({
+        success: false,
+        code: "ROLE_NOT_ASSIGNED",
+        message: "Your account does not have a valid role.",
+      });
+    }
 
-    const authCookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
-      path: "/",
-    };
+    // Create a fixed 15-day server-side session.
+    const sessionId = crypto.randomUUID();
+    const sessionExpiresAt = new Date(Date.now() + REFRESH_TOKEN_MAX_AGE);
 
-    // --------------------------------------------------
-    // Create access token
-    // --------------------------------------------------
+    await AuthSessionModel.create({
+      sessionId,
+      userId: user._id,
+      expiresAt: sessionExpiresAt,
+    });
 
     const accessToken = jwt.sign(
       {
         _id: user._id.toString(),
-        role: user.role.toString(),
+        role: roleId.toString(),
       },
       process.env.JWT_SECURE,
-      {
-        expiresIn: ACCESS_TOKEN_EXPIRES,
-      },
+      { expiresIn: ACCESS_TOKEN_EXPIRES },
     );
-
-    // --------------------------------------------------
-    // Create refresh token
-    // --------------------------------------------------
 
     const refreshToken = jwt.sign(
       {
         _id: user._id.toString(),
         type: "refresh",
+        sid: sessionId,
       },
       process.env.JWT_SECURE,
-      {
-        expiresIn: REFRESH_TOKEN_EXPIRES,
-      },
+      { expiresIn: REFRESH_TOKEN_EXPIRES },
     );
 
-    // --------------------------------------------------
-    // Store access token in HttpOnly cookie
-    // --------------------------------------------------
-
     res.cookie("accessToken", accessToken, {
-      ...authCookieOptions,
-      maxAge: 15 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: ACCESS_TOKEN_MAX_AGE,
     });
-
-    // --------------------------------------------------
-    // Store refresh token in HttpOnly cookie
-    // --------------------------------------------------
 
     res.cookie("refreshToken", refreshToken, {
-      ...authCookieOptions,
-      maxAge: 30 * 24 * 60 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: REFRESH_TOKEN_MAX_AGE,
     });
 
-    // --------------------------------------------------
-    // Clear any old password-change cookie
-    // --------------------------------------------------
-
-    res.clearCookie("passwordChangeToken", authCookieOptions);
-
-    // ==================================================
-    // 12. Update successful login information
-    // ==================================================
+    res.clearCookie("passwordChangeToken", cookieOptions);
 
     user.lastLogin = new Date();
-    user.loginAttempts = 0;
-    user.lockUntil = null;
-
     await user.save();
-
-    // ==================================================
-    // 13. Return safe response
-    // ==================================================
 
     return res.status(200).json({
       success: true,
       code: "LOGIN_SUCCESS",
       message: "Login successful",
-
       user: {
         _id: user._id,
         name: user.name,
@@ -375,11 +228,10 @@ const loginUser = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Login failed",
+      code: "LOGIN_FAILED",
+      message: "Login failed. Please try again later.",
     });
   }
 };
 
-module.exports = {
-  loginUser,
-};
+module.exports = { loginUser };

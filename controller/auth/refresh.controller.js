@@ -1,18 +1,24 @@
 const jwt = require("jsonwebtoken");
-
+const { getCookieOptions } = require("../../helper/getCookieOptions.js");
 const UserModel = require("../../model/userModel.js");
+const AuthSessionModel = require("../../model/authSessionModel.js");
+
+const ACCESS_TOKEN_EXPIRES = "15m";
+const ACCESS_TOKEN_MAX_AGE = 15 * 60 * 1000;
 
 const refreshAccessToken = async (req, res) => {
   try {
     const refreshToken = req.cookies?.refreshToken;
-    const isProduction = process.env.NODE_ENV === "production";
+    const cookieOptions = getCookieOptions(req);
 
-    const authCookieOptions = {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
-      path: "/",
-    };
+    if (!process.env.JWT_SECURE) {
+      return res.status(500).json({
+        success: false,
+        code: "AUTH_CONFIG_ERROR",
+        message: "Authentication is not configured correctly",
+      });
+    }
+
     if (!refreshToken) {
       return res.status(401).json({
         success: false,
@@ -25,7 +31,10 @@ const refreshAccessToken = async (req, res) => {
 
     try {
       decoded = jwt.verify(refreshToken, process.env.JWT_SECURE);
-    } catch (error) {
+    } catch {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
       return res.status(401).json({
         success: false,
         code: "INVALID_REFRESH_TOKEN",
@@ -33,7 +42,15 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    if (!decoded?._id || decoded.type !== "refresh") {
+    if (
+      !decoded?._id ||
+      decoded.type !== "refresh" ||
+      !decoded.sid ||
+      !decoded.iat
+    ) {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
       return res.status(401).json({
         success: false,
         code: "INVALID_REFRESH_TOKEN",
@@ -41,25 +58,57 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
-    const user = await UserModel.findById(decoded._id);
+    // Verify the session is still active in MongoDB.
+    const session = await AuthSessionModel.findOne({
+      sessionId: decoded.sid,
+      userId: decoded._id,
+      revokedAt: null,
+      expiresAt: { $gt: new Date() },
+    });
 
-    if (!user) {
-      return res.status(404).json({
+    if (!session) {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
+      return res.status(401).json({
         success: false,
-        code: "USER_NOT_FOUND",
-        message: "User not found",
+        code: "SESSION_INVALID",
+        message:
+          "Your session has expired or been revoked. Please log in again.",
       });
     }
 
-    if (!user.isActive) {
-      return res.status(403).json({
+    // Also enforce the original refresh-token lifetime.
+    const tokenAgeSeconds = Math.floor(Date.now() / 1000) - decoded.iat;
+
+    if (tokenAgeSeconds < 0 || tokenAgeSeconds >= 15 * 24 * 60 * 60) {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
+      return res.status(401).json({
         success: false,
-        code: "ACCOUNT_DISABLED",
-        message: "Your account has been disabled",
+        code: "REFRESH_SESSION_EXPIRED",
+        message: "Your session has expired. Please log in again.",
+      });
+    }
+
+    const user = await UserModel.findById(decoded._id).populate("role");
+
+    if (!user || !user.isActive) {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
+      return res.status(401).json({
+        success: false,
+        code: "ACCOUNT_UNAVAILABLE",
+        message: "Your account is unavailable. Please log in again.",
       });
     }
 
     if (user.mustChangePassword) {
+      res.clearCookie("accessToken", cookieOptions);
+      res.clearCookie("refreshToken", cookieOptions);
+
       return res.status(403).json({
         success: false,
         code: "PASSWORD_CHANGE_REQUIRED",
@@ -67,21 +116,30 @@ const refreshAccessToken = async (req, res) => {
       });
     }
 
+    const roleId = user.role?._id || user.role;
+
+    if (!roleId) {
+      return res.status(403).json({
+        success: false,
+        code: "ROLE_NOT_ASSIGNED",
+        message: "Your account does not have a valid role",
+      });
+    }
+
     const newAccessToken = jwt.sign(
       {
         _id: user._id.toString(),
-        role: user.role.toString(),
+        role: roleId.toString(),
       },
       process.env.JWT_SECURE,
-      {
-        expiresIn: "15m",
-      },
+      { expiresIn: ACCESS_TOKEN_EXPIRES },
     );
 
     res.cookie("accessToken", newAccessToken, {
-      ...authCookieOptions,
-      maxAge: 15 * 60 * 1000,
+      ...cookieOptions,
+      maxAge: ACCESS_TOKEN_MAX_AGE,
     });
+
     return res.status(200).json({
       success: true,
       code: "TOKEN_REFRESHED",
@@ -92,11 +150,10 @@ const refreshAccessToken = async (req, res) => {
 
     return res.status(500).json({
       success: false,
+      code: "REFRESH_FAILED",
       message: "Failed to refresh access token",
     });
   }
 };
 
-module.exports = {
-  refreshAccessToken,
-};
+module.exports = { refreshAccessToken };

@@ -1,20 +1,28 @@
 const jwt = require("jsonwebtoken");
-
+const { getCookieOptions } = require("../../helper/getCookieOptions.js");
 const UserModel = require("../../model/userModel.js");
+const AuthSessionModel = require("../../model/authSessionModel.js");
+
 const {
   hashPassword,
   comparePassword,
 } = require("../../helper/passwordHash.js");
 
+const clearPasswordChangeCookie = (req, res) => {
+  res.clearCookie("passwordChangeToken", getCookieOptions(req));
+};
+
 const changePassword = async (req, res) => {
   try {
-    const { newPassword, confirmPassword } = req.body;
+    const { newPassword, confirmPassword } = req.body || {};
 
-    // ==================================================
     // 1. Validate request
-    // ==================================================
-
-    if (!newPassword || !confirmPassword) {
+    if (
+      typeof newPassword !== "string" ||
+      typeof confirmPassword !== "string" ||
+      !newPassword ||
+      !confirmPassword
+    ) {
       return res.status(400).json({
         success: false,
         code: "PASSWORD_REQUIRED",
@@ -22,10 +30,7 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
     // 2. Check password match
-    // ==================================================
-
     if (newPassword !== confirmPassword) {
       return res.status(400).json({
         success: false,
@@ -34,10 +39,7 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
     // 3. Validate password strength
-    // ==================================================
-
     const passwordRegex =
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z\d]).{8,}$/;
 
@@ -50,10 +52,18 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 4. Get password-change token
-    // ==================================================
+    // 4. Check JWT configuration
+    if (!process.env.JWT_SECURE) {
+      console.error("JWT_SECURE is missing.");
 
+      return res.status(500).json({
+        success: false,
+        code: "AUTH_CONFIG_ERROR",
+        message: "Authentication is not configured correctly",
+      });
+    }
+
+    // 5. Get password-change token
     const passwordChangeToken = req.cookies?.passwordChangeToken;
 
     if (!passwordChangeToken) {
@@ -64,20 +74,13 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 5. Verify password-change token
-    // ==================================================
-
+    // 6. Verify token
     let decoded;
 
     try {
       decoded = jwt.verify(passwordChangeToken, process.env.JWT_SECURE);
-    } catch (error) {
-      res.clearCookie("passwordChangeToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-      });
+    } catch {
+      clearPasswordChangeCookie(req, res);
 
       return res.status(401).json({
         success: false,
@@ -86,16 +89,13 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 6. Verify token purpose
-    // ==================================================
-
-    if (!decoded?._id || decoded.purpose !== "PASSWORD_CHANGE") {
-      res.clearCookie("passwordChangeToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "strict",
-      });
+    // 7. Validate token purpose and user ID
+    if (
+      !decoded?._id ||
+      typeof decoded._id !== "string" ||
+      decoded.purpose !== "PASSWORD_CHANGE"
+    ) {
+      clearPasswordChangeCookie(req, res);
 
       return res.status(401).json({
         success: false,
@@ -104,13 +104,12 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 7. Find user
-    // ==================================================
-
+    // 8. Find user
     const user = await UserModel.findById(decoded._id);
 
     if (!user) {
+      clearPasswordChangeCookie(req, res);
+
       return res.status(404).json({
         success: false,
         code: "USER_NOT_FOUND",
@@ -118,11 +117,10 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 8. Check account status
-    // ==================================================
-
+    // 9. Check account status
     if (!user.isActive) {
+      clearPasswordChangeCookie(req, res);
+
       return res.status(403).json({
         success: false,
         code: "ACCOUNT_DISABLED",
@@ -131,16 +129,26 @@ const changePassword = async (req, res) => {
       });
     }
 
-    // ==================================================
-    // 9. Check last 3 passwords
-    // ==================================================
+    // 10. Only allow this flow when a password change is required
+    if (!user.mustChangePassword) {
+      clearPasswordChangeCookie(req, res);
 
+      return res.status(403).json({
+        success: false,
+        code: "PASSWORD_CHANGE_NOT_REQUIRED",
+        message: "A forced password change is not required for this account.",
+      });
+    }
+
+    // 11. Prevent reuse of the current and previous passwords
     const previousPasswords = [
       user.password,
       ...(user.passwordHistory || []),
     ].slice(0, 4);
 
     for (const oldPassword of previousPasswords) {
+      if (!oldPassword) continue;
+
       const isReusedPassword = await comparePassword(newPassword, oldPassword);
 
       if (isReusedPassword) {
@@ -152,55 +160,42 @@ const changePassword = async (req, res) => {
       }
     }
 
-    // ==================================================
-    // 10. Hash new password
-    // ==================================================
-
+    // 12. Hash new password
     const hashedPassword = await hashPassword(newPassword);
 
-    // ==================================================
-    // 11. Update password history
-    // ==================================================
-
-    const updatedPasswordHistory = [
+    // 13. Update password history
+    user.passwordHistory = [
       user.password,
       ...(user.passwordHistory || []),
     ].slice(0, 3);
 
-    user.passwordHistory = updatedPasswordHistory;
-
-    // ==================================================
-    // 12. Update password/account state
-    // ==================================================
-
+    // 14. Update account state
     user.password = hashedPassword;
-
     user.mustChangePassword = false;
-
     user.passwordChangedAt = new Date();
-
-    // Password was successfully changed.
     user.passwordResetVerified = false;
-
-    // ==================================================
-    // 13. Save user
-    // ==================================================
 
     await user.save();
 
-    // ==================================================
-    // 14. Clear password-change session
-    // ==================================================
+    // 15. Revoke all existing refresh sessions for this user
+    await AuthSessionModel.updateMany(
+      {
+        userId: user._id,
+        revokedAt: null,
+      },
+      {
+        $set: {
+          revokedAt: new Date(),
+        },
+      },
+    );
 
-    res.clearCookie("passwordChangeToken", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-    });
+    // 16. Clear password-change cookie
+    clearPasswordChangeCookie(req, res);
 
-    // ==================================================
-    // 15. Return success
-    // ==================================================
+    // 17. Require a fresh login
+    res.clearCookie("accessToken", getCookieOptions(req));
+    res.clearCookie("refreshToken", getCookieOptions(req));
 
     return res.status(200).json({
       success: true,
@@ -212,6 +207,7 @@ const changePassword = async (req, res) => {
 
     return res.status(500).json({
       success: false,
+      code: "CHANGE_PASSWORD_FAILED",
       message: "Failed to change password",
     });
   }

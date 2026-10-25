@@ -1,48 +1,49 @@
-const nodemailer = require("nodemailer");
+const axios = require("axios");
 
-const gmailUser = process.env.GMAIL_USER;
-const gmailPassword = process.env.GMAIL_APP_PASSWORD;
-const fromEmail = process.env.FROM_EMAIL;
+const sendEmail = async ({ to, subject, html, text }) => {
+  const token = process.env.MAILTRAP_TOKEN;
 
-console.log("EMAIL CONFIG CHECK");
-console.log("Gmail user:", gmailUser);
-console.log("Gmail password:", gmailPassword ? "LOADED" : "MISSING");
-console.log("From email:", fromEmail);
+  if (!token) {
+    throw new Error("Mailtrap API configuration is missing MAILTRAP_TOKEN.");
+  }
 
-if (!gmailUser || !gmailPassword) {
-  throw new Error(
-    "Gmail SMTP credentials are missing. Check GMAIL_USER and GMAIL_APP_PASSWORD.",
-  );
-}
-
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: gmailUser,
-    pass: gmailPassword,
-  },
-});
-
-const sendEmail = async ({ to, subject, html }) => {
   try {
-    const info = await transporter.sendMail({
-      from: fromEmail || gmailUser,
-      to,
-      subject,
-      html,
-    });
+    const response = await axios.post(
+      "https://send.api.mailtrap.io/api/send",
+      {
+        from: {
+          email: process.env.FROM_EMAIL || "support@codesenate.com",
+          name: "Colo71 Support",
+        },
+        to: [
+          {
+            email: Array.isArray(to) ? to[0] : to,
+          },
+        ],
+        subject,
+        ...(html ? { html } : {}),
+        ...(text ? { text } : {}),
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 15000,
+      },
+    );
 
-    console.log("Email sent:", info.messageId);
-
-    return info;
+    console.log("Mailtrap API accepted email:", response.status);
+    return response.data;
   } catch (error) {
-    console.error("Email sending failed:", error);
+    console.error(
+      "Mailtrap API email failed:",
+      error.response
+        ? `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`
+        : error.message,
+    );
     throw error;
   }
 };
 
-module.exports = {
-  sendEmail,
-};
+module.exports = { sendEmail };

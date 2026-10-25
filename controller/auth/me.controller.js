@@ -2,10 +2,32 @@ const UserModel = require("../../model/userModel.js");
 
 const getMe = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const userId = req.user?._id;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        code: "UNAUTHORIZED",
+        message: "Authentication required",
+      });
+    }
 
     const user = await UserModel.findById(userId)
-      .select("-password -passwordHistory -otp -passwordResetToken")
+      .select(
+        [
+          "-password",
+          "-passwordHistory",
+          "-otp",
+          "-expiresAt",
+          "-otpRequestedAt",
+          "-isUsed",
+          "-passwordResetToken",
+          "-passwordResetExpires",
+          "-passwordResetVerified",
+          "-loginAttempts",
+          "-lockUntil",
+        ].join(" "),
+      )
       .populate({
         path: "role",
         populate: {
@@ -31,17 +53,15 @@ const getMe = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-
       user: {
         _id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role?._id,
+        role: user.role?._id || user.role || null,
         mustChangePassword: user.mustChangePassword,
         isActive: user.isActive,
         lastLogin: user.lastLogin,
       },
-
       permissions: user.role?.permissions || [],
     });
   } catch (error) {
@@ -49,6 +69,7 @@ const getMe = async (req, res) => {
 
     return res.status(500).json({
       success: false,
+      code: "GET_CURRENT_USER_FAILED",
       message: "Failed to get current user",
     });
   }
