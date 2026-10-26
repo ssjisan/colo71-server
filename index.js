@@ -14,11 +14,13 @@ const userRoutes = require("./routers/user.routes.js");
 const authRoutes = require("./routers/auth.routes.js");
 const pageRoutes = require("./routers/page.routes.js");
 const roleRoutes = require("./routers/role.routes.js");
+const galleryRoutes = require("./routers/gallery.routes.js");
 
 // Facility Visit Scheduler route
 const facilityVisitRoutes = require("./routers/facilityVisit.routes.js");
 
-const storagePath = process.env.STORAGE_PATH || path.join(__dirname, "uploads");
+const storagePath =
+  process.env.STORAGE_PATH || path.resolve(__dirname, "../file-storage");
 
 const app = express();
 const port = process.env.PORT || 8081;
@@ -58,6 +60,7 @@ app.use(roleRoutes);
 app.use(userRoutes);
 app.use(authRoutes);
 app.use(facilityVisitRoutes);
+app.use(galleryRoutes);
 
 // File storage
 app.use("/file-storage", express.static(storagePath));
