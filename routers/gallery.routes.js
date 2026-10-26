@@ -16,6 +16,7 @@ const { requiredSignIn } = require("../middlewares/authMiddleware");
 const removeAlbumImage = require("../controller/gallery/removeAlbumImage.controller");
 const updateAlbum = require("../controller/gallery/updateAlbum.controller");
 const { getAlbumById } = require("../controller/gallery/getAlbum.controller");
+const deleteAlbum = require("../controller/gallery/deleteAlbum.controller");
 
 const galleryUpload = createImageUpload({
   fields: [
@@ -46,4 +47,6 @@ router.delete("/remove-image", requiredSignIn, removeAlbumImage);
 router.put("/edit-album/:id", requiredSignIn, updateAlbum);
 router.get("/get-album/:id", requiredSignIn, getAlbumById);
 
+// Delete album
+router.delete("/delete-album/:id", requiredSignIn, deleteAlbum);
 module.exports = router;

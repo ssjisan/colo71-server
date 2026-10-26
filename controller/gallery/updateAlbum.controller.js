@@ -7,7 +7,7 @@ const {
   MAX_FILE_SIZE,
 } = require("../../middlewares/uploadMiddleware");
 
-const TEMP_GALLERY_ROOT = path.join(STORAGE_ROOT, "temp", "gallery");
+const TEMP_GALLERY_ROOT = path.join(STORAGE_ROOT, "gallery", "temp");
 const PERMANENT_GALLERY_ROOT = path.join(STORAGE_ROOT, "gallery");
 
 const MAX_IMAGES = 50;
@@ -200,12 +200,6 @@ const updateAlbum = async (req, res, next) => {
 
       if (metadata.sessionId !== sessionId) {
         throw createHttpError("Invalid upload session.", 400);
-      }
-
-      const adminId = String(req.user?._id || req.user?.id || "");
-
-      if (!adminId || String(metadata.adminId) !== adminId) {
-        throw createHttpError("You do not own this upload session.", 403);
       }
 
       const expiresAt = new Date(metadata.expiresAt).getTime();
