@@ -17,6 +17,7 @@ const roleRoutes = require("./routers/role.routes.js");
 const galleryRoutes = require("./routers/gallery.routes.js");
 const blogRoutes = require("./routers/blog.routes.js");
 const editorRoutes = require("./routers/editor.routes.js")
+
 // Facility Visit Scheduler route
 const facilityVisitRoutes = require("./routers/facilityVisit.routes.js");
 
