@@ -17,6 +17,7 @@ const roleRoutes = require("./routers/role.routes.js");
 const galleryRoutes = require("./routers/gallery.routes.js");
 const blogRoutes = require("./routers/blog.routes.js");
 const editorRoutes = require("./routers/editor.routes.js")
+const caseStudyRoutes = require("./routers/caseStudy.routes.js");
 
 // Facility Visit Scheduler route
 const facilityVisitRoutes = require("./routers/facilityVisit.routes.js");
@@ -65,6 +66,7 @@ app.use(facilityVisitRoutes);
 app.use(galleryRoutes);
 app.use(blogRoutes);
 app.use(editorRoutes);
+app.use(caseStudyRoutes);
 
 // File storage
 app.use("/file-storage", express.static(storagePath));

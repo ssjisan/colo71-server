@@ -252,6 +252,58 @@ async function removeBlogFiles(blog) {
   });
 }
 
+async function removeUnusedEditorImages(oldContent, newContent, storageKey) {
+  if (!storageKey || path.basename(storageKey) !== storageKey) {
+    console.warn("Skipped editor image cleanup: invalid storageKey.");
+    return;
+  }
+
+  const getImageUrls = (content) => {
+    const urls = new Set();
+
+    if (Array.isArray(content)) {
+      walkImages(content, (node) => {
+        if (typeof node.url === "string" && node.url) {
+          urls.add(node.url);
+        }
+      });
+    }
+
+    return urls;
+  };
+
+  const oldUrls = getImageUrls(oldContent);
+  const newUrls = getImageUrls(newContent);
+
+  const editorDirectory = path.resolve(BLOG_ROOT, storageKey, "editor");
+
+  const expectedUrlPrefix = `${publicUrl(editorDirectory)}/`;
+
+  for (const oldUrl of oldUrls) {
+    // Keep images that are still present in the updated content.
+    if (newUrls.has(oldUrl)) continue;
+
+    // Only delete images belonging to this blog's permanent editor folder.
+    if (!oldUrl.startsWith(expectedUrlPrefix)) continue;
+
+    const filename = oldUrl.slice(expectedUrlPrefix.length);
+
+    // Prevent deleting files outside the editor directory.
+    if (!filename || path.basename(filename) !== filename) continue;
+
+    const filePath = path.resolve(editorDirectory, filename);
+
+    if (path.dirname(filePath) !== editorDirectory) continue;
+
+    try {
+      await fs.rm(filePath, { force: true });
+      console.log("[BLOG IMAGE CLEANUP] Deleted:", filename);
+    } catch (error) {
+      console.error("[BLOG IMAGE CLEANUP] Failed:", filename, error);
+    }
+  }
+}
+
 module.exports = {
   STORAGE_ROOT,
   BLOG_ROOT,
@@ -264,4 +316,5 @@ module.exports = {
   removeSession,
   removeBlogFiles,
   publicUrl,
+  removeUnusedEditorImages
 };

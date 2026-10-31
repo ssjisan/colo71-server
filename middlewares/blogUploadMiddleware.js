@@ -41,6 +41,13 @@ async function readSession(req) {
   const id = getSessionId(req);
   if (!id) throw httpError("X-Upload-Session-Id header is required.");
   const dir = sessionPath(id);
+  console.log("[SESSION FILE CHECK]", {
+  directory: dir,
+  exists: await fs
+    .access(path.join(dir, "session.json"))
+    .then(() => true)
+    .catch(() => false),
+});
   let meta;
   try {
     meta = JSON.parse(
