@@ -245,14 +245,6 @@ Colo71 Facility Visit Scheduler`,
       "A new facility visit request has been submitted. Please review the details below.",
     preheader: `New visit request from ${request.name}.`,
     content: `
-      <p style="margin:0 0 8px;font-size:18px;color:${BRAND.muted}">
-        Hello,
-      </p>
-
-      <h2 style="margin:0 0 12px;font-size:30px;line-height:1.3;letter-spacing:-0.5px;color:${BRAND.navy}">
-        ${escapeHtml(request.name)}
-      </h2>
-
       <p style="margin:0 0 28px;font-size:17px;line-height:1.7;color:${BRAND.muted}">
         A new facility visit request has been submitted. The details are below:
       </p>

@@ -21,16 +21,15 @@ const visitRequestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Pending", "Cancelled", "Completed", "Rejected"],
+      enum: ["Pending", "Approved", "Cancelled", "Completed", "Rejected"],
       default: "Pending",
       required: true,
     },
-
     statusHistory: [
       {
         previousStatus: {
           type: String,
-          enum: ["Pending", "Cancelled", "Completed", "Rejected"],
+          enum: ["Pending", "Approved", "Cancelled", "Completed", "Rejected"],
           default: null,
         },
 
